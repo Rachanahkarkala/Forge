@@ -1,0 +1,21 @@
+
+{
+  "benchmark_name": "Forge Repository Search Benchmark",
+  "version": "2.0",
+  "cases": [
+    {
+      "id": "fastapi_path_tests_001",
+      "repository": "fastapi/fastapi",
+      "pr_number": 1,
+      "source_url": "https://github.com/fastapi/fastapi/pull/1",
+      "task_type": "test",
+      "difficulty": "medium",
+      "description": "Tests for path endpoints and numeric parameter constraints",
+      "issue_text": "Add tests for path endpoints. These include testing parameters: minlength, maxlength, gt, lt, ge, le and combinations of le-ge and lt-gt. For both ints and floats.",
+      "relevant_files": [
+        "tests/main.py",
+        "tests/test_path.py"
+      ]
+    }
+  ]
+}

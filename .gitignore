@@ -1,0 +1,46 @@
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+dist/
+
+# IDE
+.vscode/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+# Cloned repositories
+backend/workspaces/
+
+# Python environment
+venv/
+**/venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+# Cloned repositories
+workspaces/
+backend/workspaces/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+**/venv/
+
+# Secrets
+.env

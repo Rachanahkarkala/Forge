@@ -1,0 +1,225 @@
+{
+  "benchmark_name": "Forge Repository Search Benchmark",
+  "benchmark_version": "2.0",
+  "total_cases": 1,
+  "metrics": {
+    "total_cases": 1,
+    "top_1_accuracy": 1.0,
+    "top_5_accuracy": 1.0,
+    "mean_reciprocal_rank": 1.0,
+    "precision_at_5": 0.2
+  },
+  "repository_metrics": {
+    "fastapi/fastapi": {
+      "total_cases": 1,
+      "top_1_accuracy": 1.0,
+      "top_5_accuracy": 1.0,
+      "mean_reciprocal_rank": 1.0,
+      "precision_at_5": 0.2
+    }
+  },
+  "task_metrics": {
+    "test": {
+      "total_cases": 1,
+      "top_1_accuracy": 1.0,
+      "top_5_accuracy": 1.0,
+      "mean_reciprocal_rank": 1.0,
+      "precision_at_5": 0.2
+    }
+  },
+  "case_results": [
+    {
+      "case_id": "fastapi_path_tests_001",
+      "repository": "fastapi/fastapi",
+      "task_type": "test",
+      "difficulty": "medium",
+      "task_intent": "test",
+      "keywords": [
+        "gt",
+        "lt",
+        "ge",
+        "le",
+        "path",
+        "endpoints",
+        "parameters",
+        "minlength",
+        "maxlength"
+      ],
+      "files_scanned": 1224,
+      "expected_files": [
+        "tests/main.py",
+        "tests/test_path.py"
+      ],
+      "first_relevant_rank": 1,
+      "hit_at_1": true,
+      "hit_at_5": true,
+      "reciprocal_rank": 1.0,
+      "precision_at_5": 0.2,
+      "ranked_files": [
+        {
+          "file": "tests/test_path.py",
+          "score": 129,
+          "matched_keywords": [
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "maxlength",
+            "minlength",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_path_alias_choices.py",
+          "score": 93,
+          "matched_keywords": [
+            "ge",
+            "parameters",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_application.py",
+          "score": 87,
+          "matched_keywords": [
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "maxlength",
+            "minlength",
+            "parameters",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_param_in_path_and_dependency.py",
+          "score": 80,
+          "matched_keywords": [
+            "parameters",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_dump_json_fast_path.py",
+          "score": 77,
+          "matched_keywords": [
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_openapi_cache_root_path.py",
+          "score": 77,
+          "matched_keywords": [
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_invalid_path_param.py",
+          "score": 73,
+          "matched_keywords": [
+            "path"
+          ],
+          "reasons": [
+            "filename_match:path",
+            "filename_matches_test_subject",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/main.py",
+          "score": 70,
+          "matched_keywords": [
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "maxlength",
+            "minlength",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "multiple_keyword_matches",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "tests/test_tutorial/test_path_params_numeric_validations/test_tutorial006.py",
+          "score": 56,
+          "matched_keywords": [
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "parameters",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "multiple_keyword_matches",
+            "path_match:path",
+            "test_file_for_test_task"
+          ]
+        },
+        {
+          "file": "fastapi/param_functions.py",
+          "score": 54,
+          "matched_keywords": [
+            "ge",
+            "gt",
+            "le",
+            "lt",
+            "parameters",
+            "path"
+          ],
+          "reasons": [
+            "content_matches",
+            "multiple_keyword_matches"
+          ]
+        }
+      ]
+    }
+  ]
+}
