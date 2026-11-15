@@ -1,33 +1,46 @@
-from fastapi import FastAPI
-from app.github.client import get_github_issue
-from pydantic import BaseModel, HttpUrl
-from fastapi import HTTPException
-from app.repositories.inspector import analyze_repository
+
 from pathlib import Path
-from pydantic import Field
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field, HttpUrl
+
+from app.github.client import get_github_issue
 from app.repositories.inspector import (
     analyze_repository,
     parse_github_url,
+    WORKSPACE_DIR,
 )
 from app.repositories.search import search_relevant_files
-from app.repositories.inspector import WORKSPACE_DIR
+from app.agents.planner import build_investigation_plan
+
+
+# --------------------------------------------------
+# REQUEST MODELS
+# --------------------------------------------------
 
 class RepositoryRequest(BaseModel):
     repository_url: HttpUrl
 
+
 class InvestigationRequest(BaseModel):
     repository_url: HttpUrl
     issue_number: int = Field(gt=0)
+
 
 class CodeSearchRequest(BaseModel):
     repository_name: str
     issue_text: str = Field(min_length=3)
     top_k: int = Field(default=10, ge=1, le=20)
 
+
+# --------------------------------------------------
+# FASTAPI APPLICATION
+# --------------------------------------------------
+
 app = FastAPI(
     title="Forge API",
     description="AI-powered software engineering agent",
-    version="0.2.0"
+    version="0.3.0"
 )
 
 
@@ -47,6 +60,10 @@ async def health():
     }
 
 
+# --------------------------------------------------
+# GITHUB ISSUE RETRIEVAL
+# --------------------------------------------------
+
 @app.get("/github/issues/{owner}/{repo}/{issue_number}")
 async def fetch_issue(
     owner: str,
@@ -64,6 +81,11 @@ async def fetch_issue(
         "data": issue
     }
 
+
+# --------------------------------------------------
+# REPOSITORY INSPECTION
+# --------------------------------------------------
+
 @app.post("/repositories/inspect")
 async def inspect_repo(request: RepositoryRequest):
 
@@ -74,35 +96,33 @@ async def inspect_repo(request: RepositoryRequest):
         return result
 
     except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
 
     except RuntimeError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
     except Exception:
         raise HTTPException(
             status_code=500,
             detail="Repository inspection failed."
         )
+
+
+# --------------------------------------------------
+# REPOSITORY CODE SEARCH
+# --------------------------------------------------
+
 @app.post("/repositories/search")
 async def search_repository(request: CodeSearchRequest):
 
     workspace_root = WORKSPACE_DIR.resolve()
-
-    # Repository names must be simple directory names.
     name = request.repository_name
 
     if (
-        name in {".", ".."}
+        not name
+        or name in {".", ".."}
         or "/" in name
         or "\\" in name
-        or not name
     ):
         raise HTTPException(
             status_code=400,
@@ -111,7 +131,6 @@ async def search_repository(request: CodeSearchRequest):
 
     repo_path = (workspace_root / name).resolve()
 
-    # Prevent selecting paths outside our workspace.
     if repo_path.parent != workspace_root:
         raise HTTPException(
             status_code=400,
@@ -135,6 +154,12 @@ async def search_repository(request: CodeSearchRequest):
         "repository_name": name,
         "analysis": result,
     }
+
+
+# --------------------------------------------------
+# COMPLETE ISSUE INVESTIGATION
+# --------------------------------------------------
+
 @app.post("/investigate")
 async def investigate(request: InvestigationRequest):
 
@@ -164,19 +189,26 @@ async def investigate(request: InvestigationRequest):
             issue.get("description") or "",
         ])
 
-        # 5. Search relevant source files
+        # 5. Search for relevant source files
         code_analysis = search_relevant_files(
             repo_path=repo_path,
             issue_text=issue_text,
             top_k=10,
         )
 
-        # 6. Return consolidated report
+        # 6. Generate an investigation plan
+        investigation_plan = build_investigation_plan(
+            issue=issue,
+            search_result=code_analysis,
+        )
+
+        # 7. Return the complete investigation report
         return {
             "success": True,
             "issue": issue,
             "repository": repository,
             "code_analysis": code_analysis,
+            "investigation_plan": investigation_plan,
         }
 
     except HTTPException:
