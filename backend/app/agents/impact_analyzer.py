@@ -7,6 +7,10 @@ from app.agents.context_builder import build_code_context
 from app.agents.dependency_analyzer import build_dependency_graph
 
 
+MAX_DEPENDENCY_FILES = 120
+MAX_IMPORT_DEPTH = 1
+
+
 def _get_search_results(search_result):
     """Support the search result formats used by Forge."""
 
@@ -26,11 +30,19 @@ def _get_search_results(search_result):
 def _get_file_path(result):
     """Extract a repository-relative path from a search result."""
 
-    return (
+    if not isinstance(result, dict):
+        return None
+
+    path = (
         result.get("file")
         or result.get("path")
         or result.get("relative_path")
     )
+
+    if not isinstance(path, str) or not path.strip():
+        return None
+
+    return path.replace("\\", "/").lstrip("./")
 
 
 def _extract_functions(file_context):
@@ -69,14 +81,25 @@ def _extract_functions(file_context):
     return []
 
 
+def _get_evidence_snippets(file_context):
+    """Return snippets only when they have the expected list format."""
+
+    snippets = file_context.get("evidence_snippets", [])
+
+    return snippets if isinstance(snippets, list) else []
+
+
 def analyze_impact(
     repo_path: Path,
     issue_text: str,
     top_k: int = 10,
 ):
     """
-    Run Forge's search, context extraction and dependency analysis
+    Run targeted search, context extraction and dependency analysis
     to estimate the potential impact of an issue.
+
+    Dependency analysis is bounded to relevant Python files and
+    their directly imported internal modules.
     """
 
     repo_path = Path(repo_path).resolve()
@@ -98,11 +121,18 @@ def analyze_impact(
 
     search_files = _get_search_results(search_result)
 
-    relevant_paths = {
-        path
-        for result in search_files
-        if (path := _get_file_path(result))
-    }
+    # Preserve search ranking order while removing duplicate paths.
+    relevant_paths = []
+    seen_paths = set()
+
+    for result in search_files:
+        path = _get_file_path(result)
+
+        if path and path not in seen_paths:
+            relevant_paths.append(path)
+            seen_paths.add(path)
+
+    relevant_path_set = set(relevant_paths)
 
     # 2. Extract code context.
     context = build_code_context(
@@ -110,55 +140,73 @@ def analyze_impact(
         search_result,
     )
 
+    if not isinstance(context, dict):
+        context = {}
+
     context_files = context.get("files", [])
 
+    if not isinstance(context_files, list):
+        context_files = []
+
     context_by_path = {
-        item.get("file"): item
+        _get_file_path(item): item
         for item in context_files
-        if isinstance(item, dict) and item.get("file")
+        if isinstance(item, dict) and _get_file_path(item)
     }
 
-    # 3. Build repository dependency graph.
-    dependency_graph = build_dependency_graph(repo_path)
+    # 3. Build a bounded dependency graph using relevant search results.
+    dependency_graph = build_dependency_graph(
+        repo_path,
+        target_files=relevant_paths,
+        max_files=MAX_DEPENDENCY_FILES,
+        max_import_depth=MAX_IMPORT_DEPTH,
+    )
 
     # 4. Identify dependencies connected to relevant files.
     connected_files = defaultdict(list)
 
-    for edge in dependency_graph["import_edges"]:
+    for edge in dependency_graph.get("import_edges", []):
         source = edge["source"]
         target = edge["target"]
 
-        if source in relevant_paths:
+        if source in relevant_path_set:
             connected_files[source].append({
                 "file": target,
                 "relationship": "imports",
+                "line": edge.get("line"),
+                "module": edge.get("module"),
             })
 
-        if target in relevant_paths:
+        if target in relevant_path_set:
             connected_files[target].append({
                 "file": source,
                 "relationship": "imported_by",
+                "line": edge.get("line"),
+                "module": edge.get("module"),
             })
 
-    # 5. Identify function calls associated with relevant files.
+    # 5. Identify syntactic function calls from relevant files.
     related_calls = []
 
-    for edge in dependency_graph["call_edges"]:
-        if edge["source_file"] in relevant_paths:
-            related_calls.append({
-                "source_file": edge["source_file"],
-                "source_scope": edge["source_scope"],
-                "target_name": edge["target_name"],
-                "target_candidates": edge["target_candidates"],
-                "line": edge["line"],
-                "resolved": edge["resolved"],
-            })
+    for edge in dependency_graph.get("call_edges", []):
+        if edge["source_file"] not in relevant_path_set:
+            continue
+
+        related_calls.append({
+            "source_file": edge["source_file"],
+            "source_scope": edge["source_scope"],
+            "target_name": edge["target_name"],
+            "target_candidates": edge.get("target_candidates", []),
+            "candidate_count": edge.get("candidate_count", 0),
+            "line": edge["line"],
+            "resolved": edge["resolved"],
+        })
 
     # 6. Identify potentially affected tests.
-    test_files = set(dependency_graph["test_files"])
+    test_files = set(dependency_graph.get("test_files", []))
     potentially_affected_tests = set()
 
-    for path in relevant_paths:
+    for path in relevant_path_set:
         if path in test_files:
             potentially_affected_tests.add(path)
 
@@ -169,7 +217,10 @@ def analyze_impact(
                 potentially_affected_tests.add(candidate)
 
     for file_data in context_files:
-        path = file_data.get("file")
+        if not isinstance(file_data, dict):
+            continue
+
+        path = _get_file_path(file_data)
 
         if path in test_files:
             potentially_affected_tests.add(path)
@@ -177,7 +228,7 @@ def analyze_impact(
     # 7. Build evidence-based impact report.
     impacted_files = []
 
-    for path in sorted(relevant_paths):
+    for path in relevant_paths:
         file_context = context_by_path.get(path, {})
 
         search_entry = next(
@@ -191,22 +242,27 @@ def analyze_impact(
         impacted_files.append({
             "file": path,
             "impact_source": "repository_search",
-            "score": search_entry.get("score"),
-            "functions": _extract_functions(file_context),
-            "evidence_snippets": file_context.get(
-                "evidence_snippets", []
+            "score": (
+                search_entry.get("score")
+                if isinstance(search_entry, dict)
+                else None
             ),
+            "functions": _extract_functions(file_context),
+            "evidence_snippets": _get_evidence_snippets(file_context),
             "dependencies": connected_files[path],
         })
+
+    import_edges = dependency_graph.get("import_edges", [])
+    call_edges = dependency_graph.get("call_edges", [])
 
     return {
         "issue_text": issue_text,
         "repository": str(repo_path),
 
         "summary": {
-            "relevant_files": len(relevant_paths),
+            "relevant_files": len(relevant_path_set),
             "context_files_analyzed": context.get(
-                "files_analyzed", 0
+                "files_analyzed", len(context_files)
             ),
             "potentially_affected_tests": len(
                 potentially_affected_tests
@@ -228,13 +284,34 @@ def analyze_impact(
         "context": context,
 
         "dependency_graph_summary": {
-            "files_analyzed": dependency_graph["files_analyzed"],
-            "functions_found": dependency_graph["functions_found"],
-            "function_calls_found": dependency_graph[
-                "function_calls_found"
-            ],
-            "import_edges": len(
-                dependency_graph["import_edges"]
+            "files_discovered": dependency_graph.get(
+                "files_discovered", 0
+            ),
+            "files_analyzed": dependency_graph.get(
+                "files_analyzed", 0
+            ),
+            "files_parsed": dependency_graph.get(
+                "files_parsed", 0
+            ),
+            "files_failed": dependency_graph.get(
+                "files_failed", 0
+            ),
+            "max_files": dependency_graph.get(
+                "max_files", MAX_DEPENDENCY_FILES
+            ),
+            "max_import_depth": dependency_graph.get(
+                "max_import_depth", MAX_IMPORT_DEPTH
+            ),
+            "functions_found": dependency_graph.get(
+                "functions_found", 0
+            ),
+            "function_calls_found": dependency_graph.get(
+                "function_calls_found", 0
+            ),
+            "import_edges": len(import_edges),
+            "call_edges": len(call_edges),
+            "analysis_scope": dependency_graph.get(
+                "analysis_scope", "unknown"
             ),
         },
 

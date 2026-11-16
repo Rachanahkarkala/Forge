@@ -24,10 +24,46 @@ IGNORED_DIRS = {
 }
 
 MAX_OUTPUT_CHARS = 20_000
+CLEANUP_TIMEOUT = 8
 
 
 class DockerSandboxError(Exception):
     """Raised when Forge cannot start or manage a Docker sandbox."""
+
+
+def _output(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _run_command(command: list[str], timeout: int) -> dict:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+
+        return {
+            "exit_code": result.returncode,
+            "stdout": result.stdout[-MAX_OUTPUT_CHARS:],
+            "stderr": result.stderr[-MAX_OUTPUT_CHARS:],
+            "timed_out": False,
+        }
+
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "exit_code": None,
+            "stdout": _output(exc.stdout)[-MAX_OUTPUT_CHARS:],
+            "stderr": _output(exc.stderr)[-MAX_OUTPUT_CHARS:],
+            "timed_out": True,
+        }
 
 
 def check_docker() -> None:
@@ -35,20 +71,14 @@ def check_docker() -> None:
     if shutil.which("docker") is None:
         raise DockerSandboxError("Docker CLI was not found.")
 
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise DockerSandboxError("Docker did not respond in time.") from exc
+    result = _run_command(["docker", "info"], 15)
 
-    if result.returncode != 0:
+    if result["timed_out"]:
+        raise DockerSandboxError("Docker did not respond in time.")
+
+    if result["exit_code"] != 0:
         raise DockerSandboxError(
-            "Docker is not available. Make sure Docker Desktop is running."
+            "Docker is unavailable. Make sure Docker Desktop is running."
         )
 
 
@@ -56,21 +86,19 @@ def prepare_workspace(repo_path: str | Path, destination: Path) -> None:
     """
     Copy the repository into a temporary workspace.
 
-    Forge runs code against this copy, not the original clone.
+    Forge executes against this copy, never the original repository.
     """
     source = Path(repo_path).resolve()
 
-    if not source.exists() or not source.is_dir():
+    if not source.is_dir():
         raise ValueError(f"Repository directory does not exist: {source}")
 
     def ignore_entries(directory: str, names: list[str]) -> set[str]:
-        ignored = set()
-
-        for name in names:
-            if name in IGNORED_DIRS:
-                ignored.add(name)
-
-        return ignored
+        return {
+            name
+            for name in names
+            if name in IGNORED_DIRS
+        }
 
     shutil.copytree(
         source,
@@ -79,6 +107,24 @@ def prepare_workspace(repo_path: str | Path, destination: Path) -> None:
         ignore=ignore_entries,
         symlinks=False,
     )
+
+
+def _cleanup_container(container_name: str) -> str | None:
+    result = _run_command(
+        ["docker", "rm", "-f", container_name],
+        CLEANUP_TIMEOUT,
+    )
+
+    if result["timed_out"]:
+        return "Docker container cleanup timed out."
+
+    if result["exit_code"] != 0:
+        message = result["stderr"].strip()
+        if "No such container" in message:
+            return None
+        return message or "Docker container cleanup failed."
+
+    return None
 
 
 def run_in_sandbox(
@@ -92,8 +138,8 @@ def run_in_sandbox(
     """
     Execute a command inside an isolated Docker container.
 
-    The repository is copied to a temporary directory first.
-    The original repository is not mounted into the container.
+    The repository is copied into a temporary workspace first.
+    The original repository is never mounted into the container.
     """
 
     if not isinstance(command, list) or not command:
@@ -112,84 +158,75 @@ def run_in_sandbox(
 
     container_name = f"forge-run-{uuid.uuid4().hex[:12]}"
     started_at = time.perf_counter()
+    cleanup_warning = None
 
-    with tempfile.TemporaryDirectory(prefix="forge-sandbox-") as temp_dir:
-        sandbox_repo = Path(temp_dir) / "repository"
-        prepare_workspace(repo_path, sandbox_repo)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="forge-sandbox-"
+        ) as temp_dir:
 
-        docker_command = [
-            "docker",
-            "run",
-            "--name", container_name,
-            "--rm",
-            "--network", "none",
-            "--cpus", cpu_limit,
-            "--memory", memory_limit,
-            "--pids-limit", "128",
-            "--security-opt", "no-new-privileges",
-            "--cap-drop", "ALL",
-            "--read-only",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
-            "--mount",
-            f"type=bind,source={sandbox_repo},target=/workspace",
-            "--workdir", "/workspace",
-            "--env", "PYTHONDONTWRITEBYTECODE=1",
-            "--env", "PYTEST_ADDOPTS=-p no:cacheprovider",
-            image,
-            *command,
-        ]
+            sandbox_repo = Path(temp_dir) / "repository"
+            prepare_workspace(repo_path, sandbox_repo)
 
-        try:
-            result = subprocess.run(
+            docker_command = [
+                "docker",
+                "run",
+                "--name", container_name,
+                "--rm",
+                "--network", "none",
+                "--cpus", cpu_limit,
+                "--memory", memory_limit,
+                "--memory-swap", memory_limit,
+                "--pids-limit", "96",
+                "--security-opt", "no-new-privileges",
+                "--cap-drop", "ALL",
+                "--read-only",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m",
+                "--mount",
+                f"type=bind,source={sandbox_repo},target=/workspace",
+                "--workdir", "/workspace",
+                "--env", "PYTHONDONTWRITEBYTECODE=1",
+                "--env", "PYTEST_ADDOPTS=-p no:cacheprovider",
+                image,
+                *command,
+            ]
+
+            result = _run_command(
                 docker_command,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=timeout_seconds,
-                check=False,
+                timeout_seconds,
             )
 
             duration = round(time.perf_counter() - started_at, 2)
 
+            if result["timed_out"]:
+                status = "timeout"
+                error = f"Execution exceeded {timeout_seconds} seconds."
+            else:
+                status = (
+                    "passed" if result["exit_code"] == 0 else "failed"
+                )
+                error = None
+
             return {
-                "status": "passed" if result.returncode == 0 else "failed",
-                "exit_code": result.returncode,
+                "status": status,
+                "exit_code": result["exit_code"],
                 "command": command,
                 "image": image,
-                "stdout": result.stdout[-MAX_OUTPUT_CHARS:],
-                "stderr": result.stderr[-MAX_OUTPUT_CHARS:],
+                "stdout": result["stdout"],
+                "stderr": result["stderr"],
                 "duration_seconds": duration,
                 "execution_performed": True,
+                "error": error,
                 "sandbox": {
                     "network": "disabled",
                     "memory_limit": memory_limit,
                     "cpu_limit": cpu_limit,
-                    "pids_limit": 128,
+                    "pids_limit": 96,
                     "original_repository_modified": False,
                 },
             }
 
-        except subprocess.TimeoutExpired as exc:
-            duration = round(time.perf_counter() - started_at, 2)
-
-            return {
-                "status": "timeout",
-                "exit_code": None,
-                "command": command,
-                "image": image,
-                "stdout": str(exc.stdout or "")[-MAX_OUTPUT_CHARS:],
-                "stderr": str(exc.stderr or "")[-MAX_OUTPUT_CHARS:],
-                "duration_seconds": duration,
-                "execution_performed": True,
-                "error": f"Execution exceeded {timeout_seconds} seconds.",
-            }
-
-        finally:
-            # Ensure a timed-out or interrupted container is cleaned up.
-            subprocess.run(
-                ["docker", "rm", "-f", container_name],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
+    finally:
+        # docker run --rm normally removes the container itself.
+        # This is a bounded fallback for interrupted/timed-out runs.
+        cleanup_warning = _cleanup_container(container_name)
